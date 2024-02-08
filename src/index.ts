@@ -3,6 +3,21 @@ import Dockerode from "dockerode";
 import type { Container, ContainerCreateOptions } from "dockerode";
 import { uuid } from "short-uuid";
 
+// https://github.com/chalk/ansi-regex/blob/main/index.js
+const ansiRegex = ({ onlyFirst = false } = {}) => {
+  const pattern = [
+    "[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)",
+    "(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))",
+  ].join("|");
+
+  return new RegExp(pattern, onlyFirst ? undefined : "g");
+};
+
+const ANSI_REGEX = ansiRegex();
+const stripAnsi = (input: string): string => {
+  return input.replace(ANSI_REGEX, "");
+};
+
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -48,15 +63,10 @@ const runExec = async (
     stream.on("end", resolve);
   });
   if (output?.at(0)) {
-    return Uint8Array.prototype.slice.call(output.at(0), 8).toString();
+    return stripAnsi(
+      Uint8Array.prototype.slice.call(output.at(0), 8).toString()
+    );
   }
-};
-const removeANSIColors = (input: string): string => {
-  // Regular expression to match ANSI color codes
-  const ansiColorRegex = /\x1B\[[0-9;]*[mGK]/g;
-
-  // Remove ANSI color codes from the input string
-  return input.replace(ansiColorRegex, "");
 };
 
 const parseCommand = (
@@ -90,6 +100,10 @@ const parseCommand = (
   };
 };
 
+const escapeSlackSpecialCharacters = (input: string): string => {
+  return input.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+};
+
 app.command("/fortnox", async ({ command, ack, say }) => {
   await ack();
 
@@ -119,12 +133,15 @@ app.command("/fortnox", async ({ command, ack, say }) => {
     const output = await runExec(container, commandToExecute);
 
     if (output) {
+      if (output.startsWith("Error: ")) {
+        throw new Error(output);
+      }
       if (meta?.save) {
         const uploadResult = await app.client.files.uploadV2({
           channels: command.channel,
           content: output,
           filename: meta.filename,
-          title: `${meta.fileExt} File`,
+          title: `${meta.filename}`,
         });
 
         if (uploadResult.error) {
@@ -135,15 +152,26 @@ app.command("/fortnox", async ({ command, ack, say }) => {
         }
       } else {
         if (meta?.ext) {
-          say(`\`\`\`${meta.ext}\n${output}\`\`\``);
+          say({
+            text: escapeSlackSpecialCharacters(output),
+            blocks: [
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: `\`\`\`${meta.ext}\n${output}\n\`\`\``,
+                },
+              },
+            ],
+          });
         } else {
-          say(`\`\`\`${output}\`\`\``);
+          say(`\`\`\`${escapeSlackSpecialCharacters(output)}\`\`\``);
         }
       }
     }
   } catch (error) {
     const { message } = error as Error;
-    say(`Failed to execute: '${command.text}' - ${message}`);
+    say(`\`\`\`\n${message}\n\`\`\``);
   } finally {
     // Remove the container (cleanup)
     await container.stop();
