@@ -1,0 +1,27 @@
+{
+  "name": "fortnox-slack-bot",
+  "version": "1.0.0",
+  "main": "./dist/index.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "start": "node .",
+    "dev": "cross-env NODE_ENV=development nodemon"
+  },
+  "devDependencies": {
+    "@slack/bolt": "^3.17.1",
+    "@types/dockerode": "^3.3.23",
+    "@types/node": "^20.11.16",
+    "cross-env": "^7.0.3",
+    "dotenv": "^16.4.1",
+    "nodemon": "^3.0.3",
+    "ts-node": "^10.9.2",
+    "tsc": "^2.0.4",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "dockerode": "^4.0.2",
+    "node": "^21.6.1",
+    "short-uuid": "^4.2.2"
+  }
+}
