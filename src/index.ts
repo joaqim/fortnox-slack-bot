@@ -41,14 +41,14 @@ const runExec = async (
   command: string
 ): Promise<string | undefined> => {
   var options: ContainerCreateOptions = {
-    Cmd: ["nu", "-c", command],
+    Cmd: ["nu", "-c",  "use /opt/nushell-modules/fortnox_client/ * ; " + command],
     Env: ['PROMPT_INDICATOR=""'],
     AttachStdout: true,
     AttachStderr: true,
   };
 
   const exec = await container.exec(options);
-  const stream = await exec?.start({ hijack: true, stdin: true });
+  const stream = await exec?.start({ hijack: true, stdin: true,  });
 
   // Initialize the output variable
   let output: Buffer[] = [];
@@ -122,6 +122,7 @@ app.command("/fortnox", async ({ command, ack, say }) => {
   // Create a Docker container
   const container = await docker.createContainer({
     Image: CONTAINER_IMAGE_REPO_TAG,
+    //Entrypoint: ['/usr/bin/nu'],
     Tty: true,
   });
 
@@ -159,7 +160,8 @@ app.command("/fortnox", async ({ command, ack, say }) => {
                 type: "section",
                 text: {
                   type: "mrkdwn",
-                  text: `\`\`\`${meta.ext}\n${output}\n\`\`\``,
+                  //text: `\`\`\`${meta.ext}\n${output}\n\`\`\``,
+                  text: `\`\`\`\n${output}\n\`\`\``,
                 },
               },
             ],
@@ -174,8 +176,12 @@ app.command("/fortnox", async ({ command, ack, say }) => {
     say(`\`\`\`\n${message}\n\`\`\``);
   } finally {
     // Remove the container (cleanup)
-    await container.stop();
-    container.remove();
+    try {
+      await container.exec({Cmd: ['exit 0']})
+    } finally {
+      await container.stop();
+      container.remove();
+    }
   }
 });
 
