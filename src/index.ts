@@ -41,19 +41,25 @@ const runExec = async (
   command: string
 ): Promise<string | undefined> => {
   var options: ContainerCreateOptions = {
-    Cmd: ["nu", "-c",  "use /opt/nushell-modules/fortnox_client/ * ; " + command],
-    Env: ['PROMPT_INDICATOR=""'],
+    User: "slackbot",
+    //Cmd: ["nu", "-c", "source ~/config.nu ; fortnox " + command],
+    Cmd: [
+      "nu",
+      "-c",
+      "source ~/.config/nushell/env.nu ; source ~/.config/nushell/config.nu ; fortnox " +
+        command,
+    ],
     AttachStdout: true,
     AttachStderr: true,
   };
 
   const exec = await container.exec(options);
-  const stream = await exec?.start({ hijack: true, stdin: true,  });
+  const stream = await exec?.start({ hijack: true, stdin: true });
 
   // Initialize the output variable
   let output: Buffer[] = [];
 
-  // Handle data events with explicit utf-8 encoding
+  // Collect data events as buffers ("utf-8" encoded)
   stream.on("data", (chunk: Buffer) => {
     output.push(chunk);
   });
@@ -69,8 +75,9 @@ const runExec = async (
   }
 };
 
-const parseCommand = (
-  command: string
+const parseOptionalSaveCommand = (
+  command: string,
+  fortnoxResource?: string
 ): {
   ext: string;
   save: boolean;
@@ -89,13 +96,13 @@ const parseCommand = (
   }
 
   const save = match[2];
-  const filename = match[3] ?? uuid();
+  const filename = match[3] ?? fortnoxResource ?? uuid();
   let fileExt = match[4] ?? ext;
 
   return {
     ext,
     save: save !== undefined,
-    filename: `${filename}.${fileExt}`,
+    filename: `${filename}`,
     fileExt: fileExt,
   };
 };
@@ -104,13 +111,114 @@ const escapeSlackSpecialCharacters = (input: string): string => {
   return input.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
 };
 
-app.command("/fortnox", async ({ command, ack, say }) => {
+app.event("app_home_opened", async ({ event, context }) => {
+  const yourView = {
+    type: "home",
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "This is a mrkdwn section block :ghost: *this is bold*, and ~this is crossed out~, and <https://google.com|this is a link>",
+        },
+      },
+    ],
+  };
+  const result = await app.client.views.publish({
+    user_id: event.user,
+    view: {
+      type: "home",
+      callback_id: "home_view",
+      blocks: [
+        {
+          dispatch_action: true,
+          type: "input",
+          element: {
+            type: "plain_text_input",
+            action_id: "findus_submit",
+          },
+          label: {
+            type: "plain_text",
+            text: "Label",
+            emoji: false,
+          },
+        },
+      ],
+    },
+  });
+  console.log({ result });
+});
+
+app.view("findus_submit", async ({ ack, body, view, client }) => {
   await ack();
+  // Process the submitted data
+  const submittedData = view.state.values;
+
+  client.views.update({
+    view: {
+      type: "home",
+      blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: JSON.stringify(submittedData, null, 2),
+          },
+        },
+      ],
+    },
+  });
+  console.log({ submittedData });
+});
+/* app.client.views.update({
+  view: {
+    type: "home" ,
+  }
+})
+ */
+app.command("plain_text_input-action", async ({ command, ack, say }) => {
+  ack();
+  console.log(JSON.stringify(command, null, 2));
+  say(`Hello, <@${command.user_id}>!`);
+});
+
+app.command("/fortnox", async ({ command, ack, say }) => {
+  ack();
+  console.log(JSON.stringify(command, null, 2));
 
   // Extract command parameters
   let commandToExecute = command.text.trim();
 
-  const meta = parseCommand(commandToExecute);
+  const fortnoxResource = commandToExecute.match(/^(\w+)\s/)?.[1];
+  if (
+    !["invoices", "-h", "version"].includes(fortnoxResource ?? commandToExecute)
+  ) {
+    say("```Unsupported fortnox resource: '" + fortnoxResource + "'```");
+    return;
+  }
+
+  if (commandToExecute.indexOf(";") != -1) {
+    commandToExecute = commandToExecute
+      .slice(0, commandToExecute.indexOf(";"))
+      .trimEnd();
+  }
+
+  if (/\$env/.test(commandToExecute)) {
+    say("```Using environment variables is not supported```");
+    return;
+  }
+
+  if (/\.env.nu/.test(commandToExecute)) {
+    say("```Not allowed to access .env.nu files```");
+    return;
+  }
+
+  if (/\^\w+/.test(commandToExecute)) {
+    say("```Not allowed to use ^ core override commands```");
+    return;
+  }
+
+  const meta = parseOptionalSaveCommand(commandToExecute, fortnoxResource);
 
   // We override nu's '| save {filename}' command, here we simply remove it after parsing it
   if (meta?.save) {
@@ -138,10 +246,14 @@ app.command("/fortnox", async ({ command, ack, say }) => {
         throw new Error(output);
       }
       if (meta?.save) {
+        if (meta.filename == "invoice") {
+          let id = output.match(/"DocumentNumber":\s*(\d+),/)?.[1];
+          if (id) meta.filename + "-" + id;
+        }
         const uploadResult = await app.client.files.uploadV2({
           channels: command.channel,
           content: output,
-          filename: meta.filename,
+          filename: `${meta.filename}.${meta.fileExt}`,
           title: `${meta.filename}`,
         });
 
@@ -160,14 +272,29 @@ app.command("/fortnox", async ({ command, ack, say }) => {
                 type: "section",
                 text: {
                   type: "mrkdwn",
-                  //text: `\`\`\`${meta.ext}\n${output}\n\`\`\``,
-                  text: `\`\`\`\n${output}\n\`\`\``,
+                  text: `\`\`\`\n${escapeSlackSpecialCharacters(
+                    output
+                  )}\n\`\`\``,
                 },
               },
+              /* {
+                type: "rich_text",
+                elements: [
+                  {
+                    type: "rich_text_preformatted",
+                    elements: [
+                      {
+                        type: "text",
+                        text: output,
+                      },
+                    ],
+                  },
+                ],
+              }, */
             ],
           });
         } else {
-          say(`\`\`\`${escapeSlackSpecialCharacters(output)}\`\`\``);
+          say(`\`\`\`\n${escapeSlackSpecialCharacters(output)}\`\`\``);
         }
       }
     }
@@ -177,17 +304,14 @@ app.command("/fortnox", async ({ command, ack, say }) => {
   } finally {
     // Remove the container (cleanup)
     try {
-      await container.exec({Cmd: ['exit 0']})
+      await container.exec({ Cmd: ["exit 0"] });
     } finally {
-      await container.stop();
-      container.remove();
+      try {
+        await container.stop();
+        container.remove();
+      } catch {}
     }
   }
-});
-
-app.event("app_mention", async ({ event, say }) => {
-  console.log({ event });
-  say("I was mentioned!");
 });
 
 (async () => {

@@ -9,7 +9,6 @@
     "dev": "cross-env NODE_ENV=development nodemon"
   },
   "devDependencies": {
-    "@slack/bolt": "^3.17.1",
     "@types/dockerode": "^3.3.23",
     "@types/node": "^20.11.16",
     "cross-env": "^7.0.3",
@@ -20,6 +19,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "@slack/bolt": "^3.17.1",
     "dockerode": "^4.0.2",
     "node": "^21.6.1",
     "short-uuid": "^4.2.2"
