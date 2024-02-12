@@ -21,8 +21,8 @@ $env.config = {
     }
 
     table: {
-        mode: compact # basic, compact, compact_double, light, thin, with_love, rounded, reinforced, heavy, none, other
-        index_mode: never # "always" show indexes, "never" show indexes, "auto" = show indexes when a table has "index" column
+        mode: heavy # basic, compact, compact_double, light, thin, with_love, rounded, reinforced, heavy, none, other
+        index_mode: auto # "always" show indexes, "never" show indexes, "auto" = show indexes when a table has "index" column
         show_empty: true # show 'empty list' and 'empty record' placeholders for command output
         padding: { left: 1, right: 1 } # a left right padding of each column in a table
         trim: {
@@ -74,8 +74,8 @@ $env.config = {
         partial: true    # set this to false to prevent partial filling of the prompt
         algorithm: "prefix"    # prefix or fuzzy
         external: {
-            enable: true # set to false to prevent nushell looking into $env.PATH to find more suggestions, `false` recommended for WSL users as this look up may be very slow
-            max_results: 100 # setting it lower can improve completion performance at the cost of omitting some options
+            enable: false # set to false to prevent nushell looking into $env.PATH to find more suggestions, `false` recommended for WSL users as this look up may be very slow
+            max_results: 10 # setting it lower can improve completion performance at the cost of omitting some options
             completer: null # check 'carapace_completer' above as an example
         }
     }
@@ -111,7 +111,7 @@ $env.config = {
             PWD: [{|before, after| null }] # run if the PWD environment is different since the last repl input
         }
         #display_output: "if (term size).columns >= 100 { table -e } else { table }" # run to display the output of a pipeline
-        display_output: "table --width 200" # run to display the output of a pipeline
+        display_output: "table -e --width 200" # run to display the output of a pipeline
         command_not_found: { "Command not found" } # return an error message when a command is not found
     }
 
@@ -123,13 +123,12 @@ $env.config = {
 use ~/.local/nupm/modules/nu-fortnox
 overlay use nu-fortnox
 
-# disable some core commands that isn't expected to be used
+# disable some core commands that isn't expected to be used in docker environment
 def cd [] {}
 def enter [] {}
 def dexit [] {} # alias for drop
 def tutor [] {}
 def scope [] {}
-def alias [] {}
 def input [] {}
 def clear [] {}
 def mv [] {}
