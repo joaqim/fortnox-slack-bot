@@ -1,4 +1,14 @@
-import { App } from "@slack/bolt";
+import {
+  App,
+  BlockAction,
+  FileBlock,
+  PlainTextInputAction,
+  SayArguments,
+  SayFn,
+  SectionBlock,
+  UploadedFile,
+  ViewErrorsResponseAction,
+} from "@slack/bolt";
 import Dockerode from "dockerode";
 import type { Container, ContainerCreateOptions } from "dockerode";
 import { uuid } from "short-uuid";
@@ -46,7 +56,7 @@ const runExec = async (
     Cmd: [
       "nu",
       "-c",
-      "source ~/.config/nushell/env.nu ; source ~/.config/nushell/config.nu ; fortnox " +
+      "source ~/.config/nushell/env.nu ; source ~/.config/nushell/config.nu ; " +
         command,
     ],
     AttachStdout: true,
@@ -68,7 +78,7 @@ const runExec = async (
   await new Promise((resolve) => {
     stream.on("end", resolve);
   });
-  if (output?.at(0)) {
+  if ((output?.length ?? 0) > 0) {
     return stripAnsi(
       Uint8Array.prototype.slice.call(output.at(0), 8).toString()
     );
@@ -84,7 +94,8 @@ const parseOptionalSaveCommand = (
   filename: string;
   fileExt?: string;
 } | null => {
-  const pattern = /to\s+(\w+)(?:\s*\|\s*(save)(?:\s+(\w+)(?:\.(\w+)(.*))?)?)?$/;
+  const pattern =
+    /(?:\s|\|)?to\s+(\w+)(?:\s*\|\s*(save)(?:\s+(\w+)(?:\.(\w+)(.*))?)?)?$/;
   const match = command.trim().match(pattern);
 
   if (!match) {
@@ -112,18 +123,6 @@ const escapeSlackSpecialCharacters = (input: string): string => {
 };
 
 app.event("app_home_opened", async ({ event, context }) => {
-  const yourView = {
-    type: "home",
-    blocks: [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "This is a mrkdwn section block :ghost: *this is bold*, and ~this is crossed out~, and <https://google.com|this is a link>",
-        },
-      },
-    ],
-  };
   const result = await app.client.views.publish({
     user_id: event.user,
     view: {
@@ -135,6 +134,7 @@ app.event("app_home_opened", async ({ event, context }) => {
           type: "input",
           element: {
             type: "plain_text_input",
+            multiline: true,
             action_id: "findus_submit",
           },
           label: {
@@ -149,72 +149,130 @@ app.event("app_home_opened", async ({ event, context }) => {
   console.log({ result });
 });
 
-app.view("findus_submit", async ({ ack, body, view, client }) => {
-  await ack();
-  // Process the submitted data
-  const submittedData = view.state.values;
+app.action<BlockAction<PlainTextInputAction>>(
+  "findus_submit",
+  async ({ ack, client, action, body, context }) => {
+    await ack();
+    const ALWAYS_CLEAR_PREVIOUS_RESPONSES = false;
+    // Retrieve the original view ID from the action payload
+    const viewId = body?.view?.id;
 
-  client.views.update({
-    view: {
-      type: "home",
-      blocks: [
-        {
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: JSON.stringify(submittedData, null, 2),
-          },
+    // Retrieve the current view state
+    const currentView = body.view!;
+    const say = async (message: string | SayArguments): Promise<any> => {
+      // Create an additional section to be added to the view
+      const additionalSection: SectionBlock | FileBlock =
+        typeof message == "string"
+          ? {
+              type: "section",
+              text: {
+                type: "mrkdwn",
+                text: message,
+              },
+            }
+          : (message.blocks!.at(1) as FileBlock);
+
+      // Update the original view by adding the additional section
+      const updatedView = {
+        view_id: viewId,
+        hash: currentView.hash,
+        view: {
+          type: currentView.type as "home",
+          blocks:
+            ALWAYS_CLEAR_PREVIOUS_RESPONSES || action.value == "clear"
+              ? [currentView.blocks.at(0)!, additionalSection]
+              : [
+                  currentView.blocks.at(0)!,
+                  additionalSection,
+                  ...currentView.blocks.slice(1)!,
+                ],
         },
-      ],
-    },
-  });
-  console.log({ submittedData });
-});
-/* app.client.views.update({
-  view: {
-    type: "home" ,
+      };
+      console.log(JSON.stringify(updatedView, null, 2));
+
+      // Call the views.update method to update the view
+      try {
+        await client.views.update(updatedView);
+      } catch (error) {
+        console.error(
+          "Error updating view:",
+          error,
+          JSON.stringify(
+            (error as { data: ViewErrorsResponseAction }).data,
+            null,
+            2
+          )
+        );
+      }
+    };
+    await execFortnoxCommand(
+      action.value,
+      say,
+      body.channel?.id ?? body.channel?.name
+    );
   }
-})
- */
+);
+
 app.command("plain_text_input-action", async ({ command, ack, say }) => {
   ack();
   console.log(JSON.stringify(command, null, 2));
   say(`Hello, <@${command.user_id}>!`);
 });
 
-app.command("/fortnox", async ({ command, ack, say }) => {
-  ack();
-  console.log(JSON.stringify(command, null, 2));
-
-  // Extract command parameters
-  let commandToExecute = command.text.trim();
-
-  const fortnoxResource = commandToExecute.match(/^(\w+)\s/)?.[1];
-  if (
-    !["invoices", "-h", "version"].includes(fortnoxResource ?? commandToExecute)
-  ) {
-    say("```Unsupported fortnox resource: '" + fortnoxResource + "'```");
+const execFortnoxCommand = async (
+  commandToExecute: string,
+  say: SayFn,
+  channel_id?: string
+) => {
+  const fortnoxResourceOrCommand: string =
+    commandToExecute.match(/^\s*(\w+)/)?.[1] ?? "";
+  let fortnoxResource: string | undefined;
+  console.log({ fortnoxResourceOrCommand });
+  if (/invoices|version/.test(fortnoxResourceOrCommand)) {
+    fortnoxResource = fortnoxResourceOrCommand;
+    if (!/^\s*fortnox/.test(commandToExecute)) {
+      commandToExecute = "fortnox " + commandToExecute;
+    }
+  }
+  /*
+  else if (!/let|fortnox/.test(fortnoxResourceOrCommand ?? "")) {
+    await say(
+      "```Unexpect command: '" +
+        fortnoxResourceOrCommand +
+        "'\nUse 'invoices -h' for help```"
+    );
     return;
   }
+  */
 
-  if (commandToExecute.indexOf(";") != -1) {
+  // Replace newlines in valid nushell multilines with ';'
+  const regex = /([^{|(])(\s*\n+\s*[^|])/g;
+  commandToExecute = commandToExecute.replaceAll(regex, (_, group1, group2) => {
+    if (group2.trim().length === 0) {
+      return group1;
+    }
+    return group1 + ";" + group2;
+  });
+
+  const ALLOW_MULTILINE_COMMANDS = true;
+  if (!ALLOW_MULTILINE_COMMANDS && commandToExecute.indexOf(";") != -1) {
     commandToExecute = commandToExecute
       .slice(0, commandToExecute.indexOf(";"))
       .trimEnd();
   }
 
   if (/\$env/.test(commandToExecute)) {
-    say("```Using environment variables is not supported```");
+    await say("```Using environment variables is not supported```");
     return;
   }
 
   if (/\.env.nu/.test(commandToExecute)) {
-    say("```Not allowed to access .env.nu files```");
+    await say("```Not allowed to access .env.nu files```");
     return;
   }
 
   if (/\^\w+/.test(commandToExecute)) {
-    say("```Not allowed to use ^ core override commands```");
+    await say("```Not allowed to use ^ core override commands```");
     return;
   }
 
@@ -230,7 +288,6 @@ app.command("/fortnox", async ({ command, ack, say }) => {
   // Create a Docker container
   const container = await docker.createContainer({
     Image: CONTAINER_IMAGE_REPO_TAG,
-    //Entrypoint: ['/usr/bin/nu'],
     Tty: true,
   });
 
@@ -251,56 +308,40 @@ app.command("/fortnox", async ({ command, ack, say }) => {
           if (id) meta.filename + "-" + id;
         }
         const uploadResult = await app.client.files.uploadV2({
-          channels: command.channel,
+          channel_id: channel_id ?? "C06HS8JP77F",
           content: output,
           filename: `${meta.filename}.${meta.fileExt}`,
-          title: `${meta.filename}`,
+          filetype: `${meta.fileExt}`,
         });
-
         if (uploadResult.error) {
-          say("Failed to upload file");
+          await say("Failed to upload file");
         } else {
-          const file = (uploadResult.files as any).at(0).files.at(0);
-          say(`<${file.permalink}|${file.title ?? file.name}>`);
+          const file = (uploadResult.files as any[])
+            .at(0)!
+            .files.at(0) as UploadedFile;
+
+          // Don't print the file link when we are in a channel; the file upload creates a link
+          // automatically
+          if (!channel_id) {
+            const fileLink = `<${file.permalink}|${file.title ?? file.name}>`;
+            await say(fileLink);
+          }
         }
       } else {
-        if (meta?.ext) {
-          say({
-            text: escapeSlackSpecialCharacters(output),
-            blocks: [
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: `\`\`\`\n${escapeSlackSpecialCharacters(
-                    output
-                  )}\n\`\`\``,
-                },
-              },
-              /* {
-                type: "rich_text",
-                elements: [
-                  {
-                    type: "rich_text_preformatted",
-                    elements: [
-                      {
-                        type: "text",
-                        text: output,
-                      },
-                    ],
-                  },
-                ],
-              }, */
-            ],
-          });
-        } else {
-          say(`\`\`\`\n${escapeSlackSpecialCharacters(output)}\`\`\``);
-        }
+        await say(`\`\`\`\n${escapeSlackSpecialCharacters(output)}\`\`\``);
       }
     }
   } catch (error) {
     const { message } = error as Error;
-    say(`\`\`\`\n${message}\n\`\`\``);
+    if (typeof message == "string") {
+      await say(`\`\`\`\n${escapeSlackSpecialCharacters(message)}\n\`\`\``);
+    } else {
+      await say(
+        `\`\`\`\n${escapeSlackSpecialCharacters(
+          (message as string[]).join("\\n")
+        )}\n\`\`\``
+      );
+    }
   } finally {
     // Remove the container (cleanup)
     try {
@@ -312,6 +353,11 @@ app.command("/fortnox", async ({ command, ack, say }) => {
       } catch {}
     }
   }
+};
+
+app.command("/fortnox", async ({ command, ack, say }) => {
+  await ack();
+  execFortnoxCommand(command.text.trim(), say, command.channel_id);
 });
 
 (async () => {
