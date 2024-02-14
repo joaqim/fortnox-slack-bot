@@ -52,13 +52,7 @@ const runExec = async (
 ): Promise<string | undefined> => {
   var options: ContainerCreateOptions = {
     User: "slackbot",
-    //Cmd: ["nu", "-c", "source ~/config.nu ; fortnox " + command],
-    Cmd: [
-      "nu",
-      "-c",
-      "source ~/.config/nushell/env.nu ; source ~/.config/nushell/config.nu ; " +
-        command,
-    ],
+    Cmd: ["nu", "--config ~/.config/nushell/config.nu", "-c", command],
     AttachStdout: true,
     AttachStderr: true,
   };
@@ -213,12 +207,6 @@ app.action<BlockAction<PlainTextInputAction>>(
   }
 );
 
-app.command("plain_text_input-action", async ({ command, ack, say }) => {
-  ack();
-  console.log(JSON.stringify(command, null, 2));
-  say(`Hello, <@${command.user_id}>!`);
-});
-
 const execFortnoxCommand = async (
   commandToExecute: string,
   say: SayFn,
@@ -303,13 +291,14 @@ const execFortnoxCommand = async (
         throw new Error(output);
       }
       if (meta?.save) {
-        if (meta.filename == "invoice") {
-          let id = output.match(/"DocumentNumber":\s*(\d+),/)?.[1];
-          if (id) meta.filename + "-" + id;
+        if (fortnoxResource == "invoices") {
+          let id = output.match(/"?DocumentNumber"?:?\s*"?(\d+)"?/gm)?.[1];
+          //if (id) meta.filename + "-" + id;
+          if (id) meta.filename = fortnoxResource + "-" + id;
         }
         const uploadResult = await app.client.files.uploadV2({
           channel_id: channel_id ?? "C06HS8JP77F",
-          content: output,
+          content: output.trimEnd(),
           filename: `${meta.filename}.${meta.fileExt}`,
           filetype: `${meta.fileExt}`,
         });
@@ -345,13 +334,9 @@ const execFortnoxCommand = async (
   } finally {
     // Remove the container (cleanup)
     try {
-      await container.exec({ Cmd: ["exit 0"] });
-    } finally {
-      try {
-        await container.stop();
-        container.remove();
-      } catch {}
-    }
+      await container.stop();
+      container.remove();
+    } catch {}
   }
 };
 

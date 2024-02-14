@@ -57,6 +57,8 @@ ENV NUPM_HOME="/home/$USER_NAME/.local/nupm"
 RUN nu -c "use ~/pkgs/nupm/nupm/ ; nupm install --force --path ~/pkgs/nupm"
 RUN nu -c "use ${NUPM_HOME}/modules/nupm ; nupm install --force --path /opt/nu-fortnox"
 
+ENV _FORTNOX_USE_CACHE = true
+ENV _FORTNOX_DB_CREDENTIALS_QUERY = '{"provider": "fortnox"}'
 
 WORKDIR /home/$USER_NAME
 SHELL ["/usr/bin/nu"]
